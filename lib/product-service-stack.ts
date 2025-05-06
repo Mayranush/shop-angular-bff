@@ -67,5 +67,9 @@ export class ProductServiceStack extends Stack {
     });
 
     productsTable.grantReadData(getProductsList);
+    stockTable.grantReadData(getProductsList);
+
+    productsTable.grantReadData(getProductById);
+    stockTable.grantReadData(getProductById);
   }
 }
