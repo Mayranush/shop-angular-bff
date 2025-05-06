@@ -27,8 +27,20 @@ export class ProductServiceStack extends Stack {
       code: lambda.Code.fromAsset('lambda'),
     });
 
+    const createProduct = new lambda.Function(this, 'CreateProductHandler', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'createProduct.handler',
+      code: lambda.Code.fromAsset('lambda'),
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(5),
+      environment: {
+        TABLE_NAME: 'Products',
+      }
+    });
+
     getProductsList.grantInvoke(new iam.ServicePrincipal('apigateway.amazonaws.com'));
     getProductById.grantInvoke(new iam.ServicePrincipal('apigateway.amazonaws.com'));
+    createProduct.grantInvoke(new iam.ServicePrincipal('apigateway.amazonaws.com'));
 
     const api = new apigateway.RestApi(this, 'ProductServiceAPI', {
       restApiName: 'Product Service',
@@ -41,6 +53,10 @@ export class ProductServiceStack extends Stack {
     const products = api.root.addResource('products');
 
     products.addMethod('GET', new apigateway.LambdaIntegration(getProductsList, {
+      proxy: true,
+    }));
+
+    products.addMethod('POST', new apigateway.LambdaIntegration(createProduct, {
       proxy: true,
     }));
 
@@ -71,5 +87,7 @@ export class ProductServiceStack extends Stack {
 
     productsTable.grantReadData(getProductById);
     stockTable.grantReadData(getProductById);
+
+    productsTable.grantWriteData(createProduct);
   }
 }
