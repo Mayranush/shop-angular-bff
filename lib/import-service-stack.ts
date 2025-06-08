@@ -18,19 +18,21 @@ export class ImportServiceStack extends cdk.Stack {
 
     const { catalogQueue } = props;
 
+        // Create S3 bucket
     const bucket = new s3.Bucket(this, 'ImportServiceBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       cors: [
-          {
-            allowedOrigins: ['*'], // or your frontend domain
-            allowedMethods: [s3.HttpMethods.PUT],
-            allowedHeaders: ['*'],
-            exposedHeaders: ['ETag'],
-          },
-        ],
+        {
+          allowedOrigins: ['*'],
+          allowedMethods: [s3.HttpMethods.PUT],
+          allowedHeaders: ['*'],
+          exposedHeaders: ['ETag'],
+        },
+      ],
     });
 
+        // Lambda to handle GET /import
     const importProductsFile = new lambda.Function(this, 'ImportProductsFileLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'importProductsFile.handler',
@@ -41,34 +43,54 @@ export class ImportServiceStack extends cdk.Stack {
     });
 
     importProductsFile.grantInvoke(new iam.ServicePrincipal('apigateway.amazonaws.com'));
-
     bucket.grantReadWrite(importProductsFile);
 
-    const api = new apigateway.RestApi(this, 'ImportApi',{
+        // Create API Gateway
+    const api = new apigateway.RestApi(this, 'ImportApi', {
       restApiName: 'Import Service',
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
       },
     });
-    const importResource = api.root.addResource('import');
-    importResource.addMethod('GET', new apigateway.LambdaIntegration(importProductsFile,{
-        proxy: true,
-    }));
 
+        // ⭐️ Import the Lambda Authorizer ARN from the AuthorizationServiceStack
+    const basicAuthorizerArn = cdk.Fn.importValue("BasicAuthorizerLambdaArn");
+    const basicAuthorizer = lambda.Function.fromFunctionArn(
+    this,
+          "BasicAuthorizerFunction",
+    basicAuthorizerArn
+    );
+
+        // Create the Lambda Authorizer for API Gateway
+    const lambdaAuthorizer = new apigateway.RequestAuthorizer(this, "ImportServiceLambdaAuthorizer", {
+      handler: basicAuthorizer,
+      identitySources: [apigateway.IdentitySource.header("Authorization")],
+      resultsCacheTtl: cdk.Duration.seconds(0), // Disable caching for testing
+    });
+
+        // Create /import resource with GET method protected by Lambda Authorizer
+    const importResource = api.root.addResource('import');
+    importResource.addMethod('GET', new apigateway.LambdaIntegration(importProductsFile, {
+      proxy: true,
+    }), {
+      authorizer: lambdaAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM,
+    });
+
+        // Lambda to parse file events
     const importFileParser = new lambda.Function(this, 'ImportFileParserLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'importFileParser.handler',
       code: lambda.Code.fromAsset('lambda'),
       environment: {
         BUCKET_NAME: bucket.bucketName,
-        SQS_URL: catalogQueue.queueUrl
+        SQS_URL: catalogQueue.queueUrl,
       },
     });
 
     catalogQueue.grantSendMessages(importFileParser);
     bucket.grantReadWrite(importFileParser);
-
     importFileParser.grantInvoke(new iam.ServicePrincipal('apigateway.amazonaws.com'));
 
     bucket.addEventNotification(
